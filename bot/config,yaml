@@ -1,0 +1,3 @@
+number_of_users: 100
+max_post_per_user: 100
+max_likes_per_user: 100
