@@ -4,7 +4,10 @@ from .models import Post, Emotion
 class PostSerializer(serializers.ModelSerializer):
     class Meta:
         model = Post
-        fields = ('post',)
+        fields = ('post','id')
+        extra_kwargs = {
+            'post': {'write_only': True},
+        }
 
 
 class EmotionSerializer(serializers.ModelSerializer):

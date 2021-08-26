@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreatePostView
+from .views import CreatePostView, LikePost
 
 
 urlpatterns = [
