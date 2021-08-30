@@ -8,6 +8,7 @@ pyyaml = "*"
 requests = "*"
 loguru = "*"
 python-dotenv = "*"
+pydantic = "*"
 
 [dev-packages]
 autopep8 = "*"
