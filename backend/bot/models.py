@@ -1,3 +1,5 @@
+from typing import Union, Tuple
+
 from pydantic import BaseModel
 import requests
 import json
@@ -5,15 +7,13 @@ import uuid
 import os
 import random
 from loguru import logger
-from requests.api import head
 from bot.errors import *
 
 
-class API_interface:
+class ApiInterface:
+    base_url = f"http://localhost:{os.getenv('DEFAULT_PORT', '8079')}/api/"
 
-    base_url = f"http://localhost:{os.getenv('DEFAULT_PORT','8079')}/api/"
-
-    def _call_api(self, **kwargs)->dict:
+    def call_api(self, **kwargs) -> Tuple[any, int]:
         if not 'http' in kwargs['path']:
             kwargs['url'] = self.base_url + kwargs['path']
         else:
@@ -21,10 +21,9 @@ class API_interface:
         kwargs.pop('path')
         resp = requests.request(**kwargs)
         return json.loads(resp.text), resp.status_code
-    
+
     def __enter__(self):
         return self
-
 
     def __exit__(self, type, value, traceback):
         pass
@@ -35,15 +34,15 @@ class Post(BaseModel):
     likes: list = []
     contents: str = None
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.contents = ' '.join(str(uuid.uuid4()) for i in range(5))
+
     @property
-    def likes_count(self):
+    def likes_count(self) -> int:
         return len(self.likes)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.contents = ' '.join(str(uuid.uuid4()) for i in range(5))
-    
-    def get_post(self):
+    def get_post(self) -> dict:
         return {"post": self.contents}
 
     def do_post(self, api, user, retry=True):
@@ -51,10 +50,10 @@ class Post(BaseModel):
         path = 'post/'
         with api as api:
             method = 'POST'
-            json = self.get_post()
+            js = self.get_post()
             headers = user.get_login_header()
-            response, status = api._call_api(path=path, method=method, json=json, headers=headers)
-            
+            response, status = api.call_api(path=path, method=method, json=js, headers=headers)
+
             if status == 201:
                 self.id = response.get('id')
                 logger.info(f"created post with {self.id} for {user.username}")
@@ -63,9 +62,7 @@ class Post(BaseModel):
                     self.do_post(api=api, user=user, retry=False)
                 else:
                     raise AutoBotError(f"error making post")
-        
         return self
-
 
 
 class User(BaseModel):
@@ -79,7 +76,6 @@ class User(BaseModel):
     refresh: str = "a"
     likes: list = []
 
-
     def __str__(self):
         return f"user: {self.username}"
 
@@ -90,19 +86,14 @@ class User(BaseModel):
     def has_posts_with_zero_likes(self):
         return True if len([i for i in self.posts if i.likes_count == 0]) else False
 
-
     def create_me(self, api, **kwargs):
 
         with api as api:
             logger.info(f"logging in user \n{self}")
-            response, status = api._call_api(
-                path="user/create/",
-                method="POST",
-                json=self.dict(include={
-                    'username':...,
-                    'password':...,
-                    'email':...})
-            )
+            response, status = api.call_api(path="user/create/", method="POST", json=self.dict(include={
+                'username': ...,
+                'password': ...,
+                'email': ...}))
 
             if status == 201:
                 self.signed_in = True
@@ -131,22 +122,22 @@ class User(BaseModel):
         """
         with api as api:
             self._get_token(api=api)
-            
-    def _get_token(self, api, refresh_token = True, break_on_error = False):
+
+    def _get_token(self, api, refresh_token=True, break_on_error=False):
         method = 'POST'
 
         if refresh_token:
             path = 'token/refresh/'
-            json = {'refresh':self.refresh}
+            js = {'refresh': self.refresh}
         else:
             path = 'token/'
-            json = self.dict(include={'username':..., 'password':...})
+            js = self.dict(include={'username': ..., 'password': ...})
 
         with api as api:
 
-            response, status = api._call_api(
+            response, status = api.call_api(
                 method=method, path=path,
-                json=json)
+                json=js)
 
             if status != 200:
                 if break_on_error:
@@ -156,28 +147,30 @@ class User(BaseModel):
                 self.refresh = response.get('refresh')
                 self.access = response.get('access')
                 logger.info(f"token updated for {self}")
-                
 
 
 class UserList(list):
+    api = ApiInterface()
 
-    api = API_interface()
-
-    def __init__(self,**kwargs):
+    def __init__(self, **kwargs):
         """This class creates and manages user list
         
         Requires:
             - links: list - import from csv file with some domain names
             - settings: dict - settings for the autobot
         """
-        
+
+        super().__init__()
+        self.max_likes_per_user = None
+        self.max_post_per_user = None
+        self.number_of_users = None
         self.links = kwargs.get('links')
-        
-        for k,v in kwargs.get('settings').items():
+
+        for k, v in kwargs.get('settings').items():
             setattr(self, k, v)
 
         self._generate_users()
-    
+
     def _generate_users(self):
 
         success_counter = 0
@@ -194,7 +187,7 @@ class UserList(list):
                                 will stop")
                     raise AutoBotError("TERMINTATING")
                 users = []
-            
+
             for user in users:
                 new_user, created = user.create_me(self.api)
 
@@ -204,78 +197,81 @@ class UserList(list):
                 if len(self) >= self.number_of_users:
                     break
         logger.info(f"successfully created {self.number_of_users} users")
-    
+
     def _get_some_users(self) -> list:
         """
         """
         random_domain = random.choice(self.links)
         hunter_path = (f"https://api.hunter.io/v2/domain-search?"
-                      f"domain={random_domain}"
-                        f"&api_key={os.getenv('HUNTERIO_API_KEY')}")
+                       f"domain={random_domain}"
+                       f"&api_key={os.getenv('HUNTERIO_API_KEY')}")
 
-        response, status = self.api._call_api(method='GET', path=hunter_path)
+        response, status = self.api.call_api(method='GET', path=hunter_path)
         if status != 200:
             logger.warning(response)
             raise HunterError("Hunterio connection error")
         else:
-            e = response.get('data')
+            emails = response.get('data')
 
-            if e is None:
+            if emails is None:
                 return []
 
-            e = e.get('emails')
+            emails = emails.get('emails')
 
-            if e is None:
+            if emails is None:
                 return []
-            
+
             user_list = []
 
-            for i in e:
-                val = i.get('value')
-                if val is not None:
-                    user_list.append(User(username=val, email=val))
+            for email in emails:
+                email_val = email.get('value')
+                if email_val is not None:
+                    user_list.append(User(username=email_val, email=email_val))
 
             return user_list
 
-    def generate_posts(self):
+    def generate_posts(self) -> None:
 
         for i in range(len(self)):
             self[i].generate_posts(
                 api=self.api,
                 max_posts=self.max_post_per_user
-                )
+            )
 
-    def get_id_of_first_to_post(self) -> int:
+    def get_id_of_next_user_to_post(self) -> Union[int, None]:
 
         users_with_no_max_likes = [
-            i for i in sorted(self, key=lambda x: x.likes_count, reverse=True)
+            i for i in sorted(self, key=lambda x: x.likes_count, reverse=True) # returns new list
             if i.like_count < self.max_likes_per_user
         ]
 
-        if len(users_with_no_max_likes) >= 0:
-            return self.index[users_with_no_max_likes[0]]
+        if len(users_with_no_max_likes) > 0:
+            return self.index(users_with_no_max_likes[0])
         else:
             return None
 
-    def get_id_of_post_to_like(self, user) -> tuple:
-        """
-        get user id and post id to like given conditions
-        """
-
-        # check if there are posts with 0 likes
-
-        users_with_zero_likes = [i for i in self if i.has_zero() and i != user]
-        
-
     def like_posts(self):
+        """
+        Likes posts according to the following logics:
+        next user to perform the like is the one with the most posts
+        and which has not reached max likes
 
+        then we select user whose posts to like (he needs to have at least one post with 0 likes)
+
+        """
         while True:
-            i = self.get_id_of_first_to_post()
-            if i is None:
+            user_id = self.get_id_of_next_user_to_post()
+            if user_id is None:
                 logger.info(f"reached max likes per user")
                 break
-            
-            # get post to like
 
-            user = self.users[i].do_like(self.api)
+            self.do_like(with_user_id=user_id)
+
+    def do_like(self, with_user_id):
+        # select
+        user = self[with_user_id]
+        users_with_posts_with_zero_likes = [
+            i for i in self if i.has_posts_with_zero_likes() and i != user and i.user
+        ]
+
 
