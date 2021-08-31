@@ -1,4 +1,4 @@
-from typing import Union, Tuple
+from typing import Union, Tuple, List
 
 from pydantic import BaseModel
 import requests
@@ -11,10 +11,11 @@ from bot.errors import *
 
 
 class ApiInterface:
+    """ Basis Api Interface to interact with backend """
     base_url = f"http://localhost:{os.getenv('DEFAULT_PORT', '8079')}/api/"
 
     def call_api(self, **kwargs) -> Tuple[any, int]:
-        if not 'http' in kwargs['path']:
+        if 'http' not in kwargs['path']:
             kwargs['url'] = self.base_url + kwargs['path']
         else:
             kwargs['url'] = kwargs['path']
@@ -38,14 +39,23 @@ class Post(BaseModel):
         super().__init__(**kwargs)
         self.contents = ' '.join(str(uuid.uuid4()) for i in range(5))
 
+    def __str__(self):
+        return f"Post: {self.id}, likes: {len(self.likes)}"
+
+    def __repr__(self):
+        return f"Post: {self.id}, likes: {len(self.likes)}"
+
     @property
     def likes_count(self) -> int:
+        """ Returns likes count of this post"""
         return len(self.likes)
 
     def get_post(self) -> dict:
+        """ returns post contents """
         return {"post": self.contents}
 
     def do_post(self, api, user, retry=True):
+        """ Makes post to api """
         user.login_me(api)
         path = 'post/'
         with api as api:
@@ -64,30 +74,60 @@ class Post(BaseModel):
                     raise AutoBotError(f"error making post")
         return self
 
+    def like_my_random_post(self, user, api, retry=True) -> None:
+        """ Store user that liked this post """
+
+        user.login_me(api)
+        path = f'post/{self.id}/like/'
+        with api as api:
+            method = 'POST'
+            headers = user.get_login_header()
+            response, status = api.call_api(path=path, method=method, headers=headers)
+
+            if status == 200:
+                self.likes.append(user.email)
+                logger.info(f"Liked post with {self.id} for {user.username}")
+            else:
+                if retry is True:
+                    self.like_my_random_post(api=api, user=user, retry=False)
+                else:
+                    raise AutoBotError(f"error liking post")
+
 
 class User(BaseModel):
+    """User class"""
     username: str = None
     email: str = None
     password: str = str(uuid.uuid4())
-    posts: list = []
-    max_posts: int = 0
-    signed_in: bool = False
-    access: str = "a"
-    refresh: str = "a"
-    likes: list = []
+    posts: list = []  # list of post instances
+    max_posts: int = 0  # max posts user can make
+    signed_in: bool = False  # is user signed in
+    access: str = "a"  # my access token
+    refresh: str = "a"  # my refresh token
+    my_likes: list = []  # stores ids of posts I liked
 
     def __str__(self):
         return f"user: {self.username}"
 
-    @property
-    def likes_count(self):
-        return len(self.likes)
+    def __repr__(self):
+        return f"User: {self.username}"
 
-    def has_posts_with_zero_likes(self):
-        return True if len([i for i in self.posts if i.likes_count == 0]) else False
+    @property
+    def my_likes_count(self) -> int:
+        """Returns number of posts user liked"""
+        return len(self.my_likes)
+
+    @property
+    def posts_count(self) -> int:
+        """Returns number of posts user made"""
+        return len(self.posts)
+
+    def has_posts_with_zero_likes(self) -> bool:
+        """ Returns amount of posts user has with zero likes"""
+        return True if len([i for i in self.posts if i.likes_count == 0]) > 0 else False
 
     def create_me(self, api, **kwargs):
-
+        """Function that creates a user"""
         with api as api:
             logger.info(f"logging in user \n{self}")
             response, status = api.call_api(path="user/create/", method="POST", json=self.dict(include={
@@ -106,10 +146,11 @@ class User(BaseModel):
                 return self, False
 
     def get_login_header(self):
+        """Returns login header"""
         return {'Authorization': 'Bearer ' + self.access}
 
     def generate_posts(self, api, max_posts):
-
+        """Generates posts for the user """
         self.max_posts = random.randint(1, max_posts)
         for i in range(self.max_posts):
             post = Post()
@@ -118,12 +159,13 @@ class User(BaseModel):
 
     def login_me(self, api):
         """
-        logs user, returns token
+        logins user, returns token
         """
         with api as api:
             self._get_token(api=api)
 
     def _get_token(self, api, refresh_token=True, break_on_error=False):
+        """Recursively returns access token"""
         method = 'POST'
 
         if refresh_token:
@@ -150,7 +192,8 @@ class User(BaseModel):
 
 
 class UserList(list):
-    api = ApiInterface()
+    """Manages the list of users"""
+    api = ApiInterface() # api connection
 
     def __init__(self, **kwargs):
         """This class creates and manages user list
@@ -172,7 +215,7 @@ class UserList(list):
         self._generate_users()
 
     def _generate_users(self):
-
+        """Generates users according up to number of users setting"""
         success_counter = 0
         hunter_attempts = 0
         hunter_max_attempts = 3
@@ -200,6 +243,7 @@ class UserList(list):
 
     def _get_some_users(self) -> list:
         """
+        gets some users data
         """
         random_domain = random.choice(self.links)
         hunter_path = (f"https://api.hunter.io/v2/domain-search?"
@@ -231,6 +275,7 @@ class UserList(list):
             return user_list
 
     def generate_posts(self) -> None:
+        """ Generates posts for the userlist """
 
         for i in range(len(self)):
             self[i].generate_posts(
@@ -239,14 +284,37 @@ class UserList(list):
             )
 
     def get_id_of_next_user_to_post(self) -> Union[int, None]:
-
+        """
+        returns id of the user that should like the post next
+        """
         users_with_no_max_likes = [
-            i for i in sorted(self, key=lambda x: x.likes_count, reverse=True) # returns new list
-            if i.like_count < self.max_likes_per_user
+            i for i in sorted(self, key=lambda x: x.my_likes_count, reverse=True)  # returns new list
+            if i.my_likes_count < self.max_likes_per_user
         ]
 
         if len(users_with_no_max_likes) > 0:
             return self.index(users_with_no_max_likes[0])
+        else:
+            return None
+
+    def get_sorted_ids(self) -> Union[List[int], None]:
+        """
+        returns indices of sorted users that should like the post next
+        """
+        users_with_no_max_likes = [
+            i for i in sorted(self, key=lambda x: x.my_likes_count, reverse=True)  # returns new list
+            if i.my_likes_count < self.max_likes_per_user
+        ]
+
+        if len(users_with_no_max_likes) > 0:
+
+            indices = []
+            for u in users_with_no_max_likes:
+                for i in range(len(self)):
+                    if u == self[i]:
+                        indices.append(i)
+            # return [self.index(i) for i in users_with_no_max_likes]
+            return indices
         else:
             return None
 
@@ -260,18 +328,100 @@ class UserList(list):
 
         """
         while True:
-            user_id = self.get_id_of_next_user_to_post()
-            if user_id is None:
-                logger.info(f"reached max likes per user")
+
+            # if there are no users with posts with zero likes then stop
+            if len([i for i in self if i.has_posts_with_zero_likes()]) == 0:
+                logger.info("There are no posts with zero likes, finished")
                 break
 
-            self.do_like(with_user_id=user_id)
+            """
+            The logics in the task is not correct, since if we always choose the user with max posts
+            and he has not reached max likes, nothing will happen if he does not have any posts to like
+            therefore I will amend it
+            """
+
+            # get user_id that should like next, stop if all users reached max likes
+            # user_id = self.get_id_of_next_user_to_post()
+            # if user_id is None:
+            #     logger.info(f"No more users to like the posts")
+            #     break
+
+            sorted_user_ids = self.get_sorted_ids()
+
+            if sorted_user_ids is None:
+                logger.info(f"No more users to like the posts")
+                break
+
+            # try to like something
+            # self.do_like(with_user_id=user_id)
+
+            for indx in sorted_user_ids:
+                self.do_like(with_user_id=indx)
+
+        self.print_summary()
+        logger.info("Completed liking posts")
+
+    def print_summary(self):
+        """prints summary"""
+        #### PRINT SUMMARY
+        print(" >>>>>>>>>>>>>>>>> SUMMARY <<<<<<<<<<<<<<<<")
+        print("              ------USERS------ ")
+        for u in self:
+            print(f"{u}, made {len(u.posts)} posts, made {len(u.my_likes)} likes")
+
+        print("            ------- POSTS --------")
+        # get posts
+        posts = []
+        for u in self:
+            posts.extend(u.posts)
+        for post in posts:
+            print(post)
 
     def do_like(self, with_user_id):
-        # select
-        user = self[with_user_id]
+        """
+        makes user with user id to like a post
+        """
+        logger.info(f">>>>>>>>>>>>>>>>>> begin liking algo <<<<<<<<<<<<<<<<<<<<<<<<")
+        # select user
+        user: User = self[with_user_id]
+        logger.info(f"{user} wants to like a post")
+
+        posts_this_user_already_liked = user.my_likes
+
+        # select all users which still have posts with zero likes and not of this user
         users_with_posts_with_zero_likes = [
-            i for i in self if i.has_posts_with_zero_likes() and i != user and i.user
-        ]
+                i for i in self if i.has_posts_with_zero_likes() and i != user
+            ]
+
+        if len(users_with_posts_with_zero_likes) == 0:
+            logger.info(f"{user} cannot do anything since there are no other users with posts with zero likes")
+            return
+        else:
+            logger.info(f"available users with posts that have zero likes\n{users_with_posts_with_zero_likes}")
+        # select random user
+        random_user = random.choice(users_with_posts_with_zero_likes)
+        logger.info(f"{user} will like posts if {random_user}")
+        # try liking any random post from "random user"
+        random_post = random.choice(random_user.posts)
+        logger.info(f"{user} wants to like {random_post}")
+        # if this user already liked the post start over
+        if random_post.id in posts_this_user_already_liked:
+            logger.warning(f"{user} cannot like {random_post}, since he already liked it")
+            return
+
+        # if all is well, like the posts
+        random_user_index = self.index(random_user)
+        random_post_index = random_user.posts.index(random_post)
+
+        self[random_user_index].posts[random_post_index].like_my_random_post(user, self.api)
+
+        self[with_user_id].my_likes.append(random_post.id)
+        logger.success(f"{user} successfully liked the post")
+        return
+
+
+
+
+
 
 
