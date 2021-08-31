@@ -15,6 +15,7 @@ clearbit = "*"
 psycopg2 = "*"
 django-celery-beat = "*"
 django-celery-results = "*"
+drf-yasg = "*"
 
 [dev-packages]
 black = "*"

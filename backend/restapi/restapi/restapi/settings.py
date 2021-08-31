@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "django_celery_beat",
     'django_celery_results',
+    'drf_yasg',
     "users",
     "posts",
 ]

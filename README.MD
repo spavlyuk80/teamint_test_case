@@ -20,5 +20,4 @@ Postgres database. The migrations and superuser will be created automatically. F
 the final result.
 
 ## Other info
-there is also a json file `thunder-collection_restapi.json` with openapi configuration of the API (not extensively tested)
-
+automatically generated API info is available at host/redoc/ 
